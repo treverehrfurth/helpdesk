@@ -1,0 +1,26 @@
+{
+  "name": "@it-helpdesk/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "predev": "npm run build",
+    "dev": "node ../../scripts/run-api-dev.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.6.0",
+    "@azure/storage-blob": "^12.26.0",
+    "@it-helpdesk/shared": "0.1.0",
+    "jose": "^5.10.0",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/pg": "^8.20.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  }
+}

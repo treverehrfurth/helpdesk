@@ -1,0 +1,79 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.2.0",
+  "id": "a3f2c8d1-4e7b-4a9f-bc2e-1d3f5a8e6c04",
+  "developer": {
+    "name": "Your Organization",
+    "websiteUrl": "https://helpdesk.example.com",
+    "privacyUrl": "https://helpdesk.example.com",
+    "termsOfUseUrl": "https://helpdesk.example.com"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Help Desk",
+    "full": "Help Desk"
+  },
+  "description": {
+    "short": "Submit and track support requests.",
+    "full": "Submit support requests, track their status, and communicate with your support team — available as a Microsoft Teams personal tab with automatic SSO."
+  },
+  "accentColor": "#1e293b",
+  "staticTabs": [
+    {
+      "entityId": "helpdesk-home",
+      "name": "Help Desk",
+      "contentUrl": "https://helpdesk.example.com",
+      "websiteUrl": "https://helpdesk.example.com",
+      "scopes": ["personal"]
+    }
+  ],
+  "webApplicationInfo": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "resource": "api://helpdesk.example.com/00000000-0000-0000-0000-000000000000"
+  },
+  "validDomains": [
+    "helpdesk.example.com"
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "activities": {
+    "activityTypes": [
+      {
+        "type": "ticket_created",
+        "description": "New ticket submitted",
+        "templateText": "{actor} submitted a new ticket: {ticketTitle}"
+      },
+      {
+        "type": "ticket_assigned",
+        "description": "Ticket assigned to you",
+        "templateText": "{actor} assigned a ticket to you: {ticketTitle}"
+      },
+      {
+        "type": "status_changed",
+        "description": "Ticket status updated",
+        "templateText": "{actor} updated your ticket status: {ticketTitle}"
+      },
+      {
+        "type": "new_message",
+        "description": "New reply on ticket",
+        "templateText": "{actor} replied on ticket: {ticketTitle}"
+      }
+    ]
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "TeamsActivity.Send.User",
+          "type": "Application"
+        }
+      ]
+    }
+  }
+}

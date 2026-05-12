@@ -1,0 +1,6 @@
+node_modules
+src
+sql
+tsconfig.json
+.env*
+*.md

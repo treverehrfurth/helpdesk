@@ -1,0 +1,17 @@
+teams/helpdesk-teams.zip
+node_modules
+dist
+.DS_Store
+.env
+.env.local
+.env.*.local
+coverage
+apps/api/local.settings.json
+apps/api/.aspnet
+apps/api/.azurefunctions
+apps/web/.env.local
+.func-home
+*.log
+.claude
+.envrc
+.direnv/

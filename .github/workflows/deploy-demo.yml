@@ -1,0 +1,46 @@
+name: Deploy Demo (Cloudflare Pages)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-demo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build (mock mode)
+        run: npm run build
+        env:
+          VITE_AUTH_MODE: mock
+          VITE_USE_MOCK_API: 'true'
+          VITE_DEV_ROLE: admin
+          VITE_ENTRA_CLIENT_ID: ''
+          VITE_ENTRA_API_SCOPE: ''
+          ENTRA_TENANT_ID: ''
+          ENTRA_API_CLIENT_ID: ''
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          projectName: helpdesk
+          directory: apps/web/dist
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

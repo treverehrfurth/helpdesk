@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Help Desk — API Portal</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+    .demo-notice {
+      background: #1d4ed8;
+      color: #fff;
+      text-align: center;
+      padding: 10px 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .demo-notice a {
+      color: #bfdbfe;
+      text-decoration: underline;
+    }
+
+    /* Tighten up Swagger UI top bar */
+    .swagger-ui .topbar { background: #1e293b; }
+    .swagger-ui .topbar .download-url-wrapper { display: none; }
+    .swagger-ui .topbar-wrapper img { display: none; }
+    .swagger-ui .topbar-wrapper::before {
+      content: "Help Desk — API Reference";
+      color: #f8fafc;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 0 16px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="demo-notice">
+  <strong>Demo reference view</strong> — this page documents the live Azure Functions API.
+  Endpoint execution is disabled in the portfolio demo; the full interactive version is available on the live deployment.
+</div>
+
+<div id="swagger-ui"></div>
+
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+const spec = {
+  openapi: "3.0.3",
+  info: {
+    title: "Help Desk API",
+    version: "1.0.0",
+    description: `REST API for the Help Desk system, hosted on Azure Functions.
+
+**Authentication**
+
+The API resolves the caller's identity from one of two sources (checked in order):
+
+1. \`x-ms-client-principal\` — base64-encoded JWT forwarded by Azure Static Web Apps / Entra ID
+2. Entra bearer token in the \`Authorization\` header (MSAL-acquired)
+
+Role is derived from Entra group membership. All other authenticated users default to \`end_user\`.
+
+**Roles**
+
+| Role | Description |
+|---|---|
+| \`end_user\` | Standard employee — can submit and track their own tickets |
+| \`tech\` | Help desk technician — can manage all tickets and post on any thread |
+| \`admin\` | Full access — includes category/status/staff management and permanent deletion |`
+  },
+  servers: [
+    { url: "/api", description: "Azure Functions host (via Static Web Apps proxy)" }
+  ],
+  security: [{ BearerAuth: [] }],
+  tags: [
+    { name: "Identity", description: "Current user" },
+    { name: "Tickets (User)", description: "Ticket operations available to all authenticated users" },
+    { name: "Messages (User)", description: "Message operations for a user's own tickets" },
+    { name: "Attachments", description: "File uploads and download URLs" },
+    { name: "Notifications", description: "Per-user notification feed" },
+    { name: "Tickets (Staff)", description: "Ticket management for technicians and admins" },
+    { name: "Messages (Staff)", description: "Message operations on any ticket" },
+    { name: "Recycle Bin", description: "Soft-deleted ticket management" },
+    { name: "Categories", description: "Ticket category management" },
+    { name: "Statuses", description: "Ticket status management (admin only)" },
+    { name: "Staff", description: "Staff directory management (admin only)" },
+    { name: "Directory", description: "Entra ID user lookup (admin only)" }
+  ],
+  components: {
+    securitySchemes: {
+      BearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description: "MSAL-acquired Entra ID access token. The live portal pre-fills this from the active session."
+      }
+    },
+    schemas: {
+      UserRole: {
+        type: "string",
+        enum: ["end_user", "tech", "admin"],
+        description: "Role derived from Entra group membership"
+      },
+      UserProfile: {
+        type: "object",
+        required: ["email", "name", "role"],
+        properties: {
+          email: { type: "string", format: "email", example: "maya.patel@example.com" },
+          name: { type: "string", example: "Maya Patel" },
+          role: { $ref: "#/components/schemas/UserRole" }
+        }
+      },
+      Attachment: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          fileName: { type: "string", example: "screenshot.png" },
+          storageUrl: { type: "string", nullable: true, description: "Azure Blob Storage URL, null until uploaded" },
+          createdAt: { type: "string", format: "date-time" }
+        }
+      },
+      ActivityEntry: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          actionType: {
+            type: "string",
+            enum: ["ticket_created", "ticket_updated", "ticket_assigned", "status_changed"],
+            example: "ticket_updated"
+          },
+          actorEmail: { type: "string", format: "email" },
+          actorName: { type: "string" },
+          oldValueJson: { type: "object", nullable: true, description: "Previous field values" },
+          newValueJson: { type: "object", nullable: true, description: "Updated field values" },
+          createdAt: { type: "string", format: "date-time" }
+        }
+      },
+      Ticket: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          ticketNumber: { type: "integer", description: "Human-readable sequential number, displayed zero-padded as #0042", example: 42 },
+          title: { type: "string", example: "Laptop docking station no longer detects monitors" },
+          category: { type: "string", example: "Hardware" },
+          description: { type: "string" },
+          status: { type: "string", example: "In Progress" },
+          requesterEmail: { type: "string", format: "email" },
+          requesterName: { type: "string" },
+          assignedToEmail: { type: "string", format: "email", nullable: true },
+          assignedToName: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+          deletedAt: { type: "string", format: "date-time", nullable: true, description: "Set on soft-delete; null for active tickets" },
+          attachments: { type: "array", items: { $ref: "#/components/schemas/Attachment" } },
+          activity: { type: "array", items: { $ref: "#/components/schemas/ActivityEntry" } }
+        }
+      },
+      TicketSummary: {
+        type: "object",
+        description: "Lightweight ticket shape returned by list endpoints",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          ticketNumber: { type: "integer", example: 42 },
+          title: { type: "string" },
+          category: { type: "string" },
+          status: { type: "string" },
+          requesterEmail: { type: "string", format: "email" },
+          requesterName: { type: "string" },
+          assignedToEmail: { type: "string", format: "email", nullable: true },
+          assignedToName: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+          deletedAt: { type: "string", format: "date-time", nullable: true }
+        }
+      },
+      TicketMessage: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          ticketId: { type: "string", format: "uuid" },
+          authorEmail: { type: "string", format: "email" },
+          authorName: { type: "string" },
+          authorRole: { $ref: "#/components/schemas/UserRole" },
+          body: { type: "string" },
+          createdAt: { type: "string", format: "date-time" }
+        }
+      },
+      CategoryRecord: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          name: { type: "string", example: "Hardware" },
+          isActive: { type: "boolean" }
+        }
+      },
+      TicketStatusRecord: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          name: { type: "string", example: "In Progress" },
+          color: { type: "string", enum: ["amber", "blue", "green", "gray", "red", "purple", "slate"], example: "blue" },
+          sortOrder: { type: "integer", description: "Display order in UI dropdowns", example: 2 }
+        }
+      },
+      StaffMember: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          email: { type: "string", format: "email" },
+          displayName: { type: "string" },
+          role: { type: "string", enum: ["tech", "admin"] },
+          isActive: { type: "boolean" },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" }
+        }
+      },
+      NotificationRecord: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          ticketId: { type: "string", format: "uuid" },
+          actionType: {
+            type: "string",
+            enum: ["ticket_created", "ticket_assigned", "status_changed", "new_message"]
+          },
+          actorEmail: { type: "string", format: "email" },
+          actorName: { type: "string" },
+          title: { type: "string", example: "Your ticket status changed to In Progress: Docking station issue" },
+          message: { type: "string", nullable: true },
+          isRead: { type: "boolean" },
+          readAt: { type: "string", format: "date-time", nullable: true },
+          createdAt: { type: "string", format: "date-time" }
+        }
+      },
+      EntraUser: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Entra object ID" },
+          email: { type: "string", format: "email" },
+          displayName: { type: "string" }
+        }
+      },
+      CreateTicketInput: {
+        type: "object",
+        required: ["title", "category", "description"],
+        properties: {
+          title: { type: "string", example: "Need access to the shared finance mailbox" },
+          category: { type: "string", example: "Access" },
+          description: { type: "string", example: "Please add me to the finance shared mailbox before month-end close." },
+          attachments: {
+            type: "array",
+            items: { type: "object", properties: { fileName: { type: "string" } } },
+            description: "Declare attachment file names upfront; upload separately via the upload-url endpoint"
+          },
+          onBehalfOfEmail: { type: "string", format: "email", nullable: true, description: "Admin/tech only — submit on behalf of this user" },
+          onBehalfOfName: { type: "string", nullable: true },
+          assignedToEmail: { type: "string", format: "email", nullable: true, description: "Admin/tech only — pre-assign on creation" },
+          assignedToName: { type: "string", nullable: true }
+        }
+      },
+      UpdateTicketInput: {
+        type: "object",
+        description: "All fields are optional. Pass `assignedToEmail: null` to unassign.",
+        properties: {
+          status: { type: "string", example: "In Progress" },
+          category: { type: "string", example: "Hardware" },
+          assignedToEmail: { type: "string", format: "email", nullable: true },
+          assignedToName: { type: "string", nullable: true }
+        }
+      },
+      PostMessageInput: {
+        type: "object",
+        required: ["body"],
+        properties: {
+          body: { type: "string", example: "I've requested access from the finance team lead — expecting a response by EOD." }
+        }
+      },
+      CreateCategoryInput: {
+        type: "object",
+        required: ["name"],
+        properties: { name: { type: "string", example: "Printing" } }
+      },
+      CreateStatusInput: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string", example: "Waiting on Vendor" },
+          color: { type: "string", enum: ["amber", "blue", "green", "gray", "red", "purple", "slate"], example: "amber" }
+        }
+      },
+      UpdateStatusInput: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          color: { type: "string", enum: ["amber", "blue", "green", "gray", "red", "purple", "slate"] },
+          sortOrder: { type: "integer" }
+        }
+      },
+      CreateStaffMemberInput: {
+        type: "object",
+        required: ["email", "displayName", "role"],
+        properties: {
+          email: { type: "string", format: "email" },
+          displayName: { type: "string" },
+          role: { type: "string", enum: ["tech", "admin"] },
+          isActive: { type: "boolean", default: true }
+        }
+      },
+      UpdateStaffMemberInput: {
+        type: "object",
+        properties: {
+          role: { type: "string", enum: ["tech", "admin"] },
+          isActive: { type: "boolean" }
+        }
+      },
+      NotificationListResponse: {
+        type: "object",
+        properties: {
+          items: { type: "array", items: { $ref: "#/components/schemas/NotificationRecord" } },
+          unreadCount: { type: "integer" }
+        }
+      },
+      UploadUrlRequest: {
+        type: "object",
+        required: ["attachmentId", "contentType"],
+        properties: {
+          attachmentId: { type: "string", format: "uuid" },
+          contentType: { type: "string", example: "image/png" }
+        }
+      },
+      UploadUrlResponse: {
+        type: "object",
+        properties: {
+          uploadUrl: { type: "string", description: "Short-lived Azure Blob SAS URL for PUT upload" },
+          expiresAt: { type: "string", format: "date-time" }
+        }
+      }
+    }
+  },
+  paths: {
+    "/me": {
+      get: {
+        tags: ["Identity"],
+        summary: "Get current user",
+        description: "Returns the signed-in user's email, display name, and resolved role.",
+        operationId: "getMe",
+        responses: {
+          "200": {
+            description: "Current user profile",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } }
+          },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/me/tickets": {
+      get: {
+        tags: ["Tickets (User)"],
+        summary: "List my tickets",
+        description: "Returns all active tickets where the caller is the requester, sorted by most recently updated.",
+        operationId: "getMyTickets",
+        responses: {
+          "200": {
+            description: "List of ticket summaries",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketSummary" } } } }
+          },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/me/tickets/{id}": {
+      get: {
+        tags: ["Tickets (User)"],
+        summary: "Get my ticket by ID",
+        description: "Returns the full ticket detail for a ticket owned by the caller. Returns 403 if the caller is not the requester.",
+        operationId: "getMyTicketById",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Full ticket", content: { "application/json": { schema: { $ref: "#/components/schemas/Ticket" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Ticket belongs to another user" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/tickets": {
+      post: {
+        tags: ["Tickets (User)"],
+        summary: "Create a ticket",
+        description: "Creates a new help desk ticket. `onBehalfOf*` and `assignedTo*` fields are silently ignored for `end_user` callers.",
+        operationId: "createTicket",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTicketInput" } } }
+        },
+        responses: {
+          "201": { description: "Created ticket", content: { "application/json": { schema: { $ref: "#/components/schemas/Ticket" } } } },
+          "400": { description: "Validation error" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/me/tickets/{id}/messages": {
+      get: {
+        tags: ["Messages (User)"],
+        summary: "List messages on my ticket",
+        operationId: "getMyTicketMessages",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Messages sorted oldest-first", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketMessage" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Ticket belongs to another user" },
+          "404": { description: "Ticket not found" }
+        }
+      },
+      post: {
+        tags: ["Messages (User)"],
+        summary: "Post a message on my ticket",
+        operationId: "createMyTicketMessage",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/PostMessageInput" } } }
+        },
+        responses: {
+          "201": { description: "Created message", content: { "application/json": { schema: { $ref: "#/components/schemas/TicketMessage" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Ticket belongs to another user" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/tickets/{id}/attachments/upload-url": {
+      post: {
+        tags: ["Attachments"],
+        summary: "Request a SAS upload URL",
+        description: "Returns a short-lived Azure Blob SAS URL for a PUT upload. Call this before uploading the file bytes.",
+        operationId: "getAttachmentUploadUrl",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/UploadUrlRequest" } } }
+        },
+        responses: {
+          "200": { description: "SAS upload URL", content: { "application/json": { schema: { $ref: "#/components/schemas/UploadUrlResponse" } } } },
+          "401": { description: "Unauthenticated" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/tickets/{id}/attachments/upload": {
+      post: {
+        tags: ["Attachments"],
+        summary: "Upload an attachment blob",
+        description: "Confirms an attachment upload and records the final storage URL.",
+        operationId: "uploadAttachment",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object", properties: { attachmentId: { type: "string", format: "uuid" } } } } }
+        },
+        responses: {
+          "200": { description: "Upload confirmed" },
+          "401": { description: "Unauthenticated" },
+          "404": { description: "Ticket or attachment not found" }
+        }
+      }
+    },
+    "/tickets/{ticketId}/attachments/{attachmentId}/download-url": {
+      get: {
+        tags: ["Attachments"],
+        summary: "Get a download URL for an attachment",
+        description: "Returns a short-lived SAS download URL. The URL expires after a few minutes.",
+        operationId: "getAttachmentDownloadUrl",
+        parameters: [
+          { name: "ticketId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "attachmentId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Download URL", content: { "application/json": { schema: { type: "object", properties: { url: { type: "string" } } } } } },
+          "401": { description: "Unauthenticated" },
+          "404": { description: "Attachment not found" }
+        }
+      }
+    },
+    "/me/notifications": {
+      get: {
+        tags: ["Notifications"],
+        summary: "List my notifications",
+        description: "Returns the caller's last 50 notifications (newest first) with unread count.",
+        operationId: "getMyNotifications",
+        responses: {
+          "200": { description: "Notification list with unread count", content: { "application/json": { schema: { $ref: "#/components/schemas/NotificationListResponse" } } } },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/me/notifications/{id}": {
+      patch: {
+        tags: ["Notifications"],
+        summary: "Mark a notification as read",
+        operationId: "markNotificationRead",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Notification marked read" },
+          "401": { description: "Unauthenticated" },
+          "404": { description: "Notification not found" }
+        }
+      }
+    },
+    "/me/notifications/read-all": {
+      patch: {
+        tags: ["Notifications"],
+        summary: "Mark all notifications as read",
+        operationId: "markAllNotificationsRead",
+        responses: {
+          "200": { description: "All notifications marked read" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/me/notifications/read": {
+      delete: {
+        tags: ["Notifications"],
+        summary: "Clear all read notifications",
+        description: "Permanently deletes all notifications where `isRead` is true.",
+        operationId: "clearReadNotifications",
+        responses: {
+          "200": { description: "Read notifications cleared" },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/categories": {
+      get: {
+        tags: ["Categories"],
+        summary: "List active categories",
+        description: "Returns all active categories. Used to populate the submit form dropdown.",
+        operationId: "getCategories",
+        responses: {
+          "200": { description: "Active categories", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/CategoryRecord" } } } } },
+          "401": { description: "Unauthenticated" }
+        }
+      }
+    },
+    "/manage/tickets": {
+      get: {
+        tags: ["Tickets (Staff)"],
+        summary: "List all tickets",
+        description: "Returns all active (non-deleted) tickets across the org. Supports filtering. Requires tech or admin role.",
+        operationId: "getAdminTickets",
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string" }, description: "Filter by status name (exact match)" },
+          { name: "category", in: "query", schema: { type: "string" }, description: "Filter by category name (exact match)" },
+          { name: "assignee", in: "query", schema: { type: "string" }, description: "Filter by assignee email; comma-separate for multiple" },
+          { name: "requester", in: "query", schema: { type: "string" }, description: "Filter by requester email; comma-separate for multiple" },
+          { name: "search", in: "query", schema: { type: "string" }, description: "Full-text search across title, description, and requester" }
+        ],
+        responses: {
+          "200": { description: "Ticket summaries", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketSummary" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" }
+        }
+      }
+    },
+    "/manage/tickets/{id}": {
+      get: {
+        tags: ["Tickets (Staff)"],
+        summary: "Get any ticket by ID",
+        description: "Returns the full ticket, including soft-deleted ones. Requires tech or admin role.",
+        operationId: "getAdminTicketById",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Full ticket", content: { "application/json": { schema: { $ref: "#/components/schemas/Ticket" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      },
+      patch: {
+        tags: ["Tickets (Staff)"],
+        summary: "Update a ticket",
+        description: "Updates status, category, or assignment. All fields are optional. Pass `assignedToEmail: null` to unassign. Requires tech or admin role.",
+        operationId: "updateAdminTicket",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTicketInput" } } }
+        },
+        responses: {
+          "200": { description: "Updated ticket", content: { "application/json": { schema: { $ref: "#/components/schemas/Ticket" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      },
+      delete: {
+        tags: ["Tickets (Staff)"],
+        summary: "Soft-delete a ticket",
+        description: "Sets `deletedAt` on the ticket and moves it to the recycle bin. Does not permanently remove data. Requires tech or admin role.",
+        operationId: "deleteAdminTicket",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Ticket soft-deleted" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/manage/tickets/by-number/{number}": {
+      get: {
+        tags: ["Tickets (Staff)"],
+        summary: "Get a ticket by number",
+        description: "Looks up a ticket by its sequential human-readable number (e.g. `42`). Useful for reporting and support references. Requires tech or admin role.",
+        operationId: "getTicketByNumber",
+        parameters: [{ name: "number", in: "path", required: true, schema: { type: "integer" }, description: "Ticket number (not UUID)" }],
+        responses: {
+          "200": { description: "Full ticket", content: { "application/json": { schema: { $ref: "#/components/schemas/Ticket" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/manage/tickets/{id}/messages": {
+      get: {
+        tags: ["Messages (Staff)"],
+        summary: "List messages on any ticket",
+        description: "Returns all messages on the specified ticket. Requires tech or admin role.",
+        operationId: "getAdminTicketMessages",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Messages sorted oldest-first", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketMessage" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      },
+      post: {
+        tags: ["Messages (Staff)"],
+        summary: "Post a message on any ticket",
+        description: "Adds a message to any ticket. Requires tech or admin role.",
+        operationId: "createAdminTicketMessage",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/PostMessageInput" } } }
+        },
+        responses: {
+          "201": { description: "Created message", content: { "application/json": { schema: { $ref: "#/components/schemas/TicketMessage" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/manage/recycle-bin": {
+      get: {
+        tags: ["Recycle Bin"],
+        summary: "List soft-deleted tickets",
+        description: "Returns all tickets in the recycle bin. Tickets are auto-purged after 90 days. Requires tech or admin role.",
+        operationId: "getRecycleBin",
+        responses: {
+          "200": { description: "Soft-deleted ticket summaries", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketSummary" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" }
+        }
+      }
+    },
+    "/manage/recycle-bin/{id}/restore": {
+      post: {
+        tags: ["Recycle Bin"],
+        summary: "Restore a deleted ticket",
+        description: "Clears `deletedAt` and returns the ticket to active status. Requires tech or admin role.",
+        operationId: "restoreTicket",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Ticket restored" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" },
+          "404": { description: "Ticket not found in recycle bin" }
+        }
+      }
+    },
+    "/manage/recycle-bin/{id}": {
+      delete: {
+        tags: ["Recycle Bin"],
+        summary: "Permanently delete a ticket",
+        description: "Irreversibly removes the ticket and all associated data. Admin only.",
+        operationId: "permanentlyDeleteTicket",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Ticket permanently deleted" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Ticket not found" }
+        }
+      }
+    },
+    "/manage/categories": {
+      get: {
+        tags: ["Categories"],
+        summary: "List all categories (staff)",
+        description: "Returns all categories including inactive ones. Requires tech or admin role.",
+        operationId: "getAdminCategories",
+        responses: {
+          "200": { description: "All categories", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/CategoryRecord" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Insufficient role" }
+        }
+      },
+      post: {
+        tags: ["Categories"],
+        summary: "Create a category",
+        description: "Admin only.",
+        operationId: "createCategory",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateCategoryInput" } } } },
+        responses: {
+          "201": { description: "Created category", content: { "application/json": { schema: { $ref: "#/components/schemas/CategoryRecord" } } } },
+          "400": { description: "Duplicate name or validation error" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      }
+    },
+    "/manage/categories/{id}": {
+      patch: {
+        tags: ["Categories"],
+        summary: "Update a category",
+        description: "Admin only.",
+        operationId: "updateCategory",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateCategoryInput" } } } },
+        responses: {
+          "200": { description: "Updated category", content: { "application/json": { schema: { $ref: "#/components/schemas/CategoryRecord" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Category not found" }
+        }
+      },
+      delete: {
+        tags: ["Categories"],
+        summary: "Delete a category",
+        description: "Admin only. Optionally migrate existing tickets to another category.",
+        operationId: "deleteCategory",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "migrateTo", in: "query", schema: { type: "string", format: "uuid" }, description: "Category ID to migrate existing tickets to" }
+        ],
+        responses: {
+          "200": { description: "Category deleted" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Category not found" }
+        }
+      }
+    },
+    "/manage/admin/statuses": {
+      get: {
+        tags: ["Statuses"],
+        summary: "List all statuses",
+        description: "Returns all ticket statuses sorted by `sortOrder`. Admin only.",
+        operationId: "getStatuses",
+        responses: {
+          "200": { description: "All statuses", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TicketStatusRecord" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      },
+      post: {
+        tags: ["Statuses"],
+        summary: "Create a status",
+        description: "Admin only.",
+        operationId: "createStatus",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateStatusInput" } } } },
+        responses: {
+          "201": { description: "Created status", content: { "application/json": { schema: { $ref: "#/components/schemas/TicketStatusRecord" } } } },
+          "400": { description: "Duplicate name or validation error" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      }
+    },
+    "/manage/admin/statuses/{id}": {
+      patch: {
+        tags: ["Statuses"],
+        summary: "Update a status",
+        description: "Admin only.",
+        operationId: "updateStatus",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateStatusInput" } } } },
+        responses: {
+          "200": { description: "Updated status", content: { "application/json": { schema: { $ref: "#/components/schemas/TicketStatusRecord" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Status not found" }
+        }
+      },
+      delete: {
+        tags: ["Statuses"],
+        summary: "Delete a status",
+        description: "Admin only.",
+        operationId: "deleteStatus",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "migrateTo", in: "query", schema: { type: "string", format: "uuid" }, description: "Status ID to migrate existing tickets to" }
+        ],
+        responses: {
+          "200": { description: "Status deleted" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Status not found" }
+        }
+      }
+    },
+    "/manage/staff": {
+      get: {
+        tags: ["Staff"],
+        summary: "List staff members",
+        description: "Returns active staff by default. Pass `?active=false` to include inactive members. Admin only.",
+        operationId: "getStaff",
+        parameters: [{ name: "active", in: "query", schema: { type: "boolean" }, description: "Default true — pass false to include inactive staff" }],
+        responses: {
+          "200": { description: "Staff members sorted by display name", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/StaffMember" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      },
+      post: {
+        tags: ["Staff"],
+        summary: "Add a staff member",
+        description: "Admin only.",
+        operationId: "createStaffMember",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateStaffMemberInput" } } } },
+        responses: {
+          "201": { description: "Created staff member", content: { "application/json": { schema: { $ref: "#/components/schemas/StaffMember" } } } },
+          "400": { description: "Duplicate email or validation error" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      }
+    },
+    "/manage/staff/{id}": {
+      patch: {
+        tags: ["Staff"],
+        summary: "Update a staff member",
+        description: "Admin only.",
+        operationId: "updateStaffMember",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateStaffMemberInput" } } } },
+        responses: {
+          "200": { description: "Updated staff member", content: { "application/json": { schema: { $ref: "#/components/schemas/StaffMember" } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Staff member not found" }
+        }
+      },
+      delete: {
+        tags: ["Staff"],
+        summary: "Remove a staff member",
+        description: "Admin only.",
+        operationId: "deleteStaffMember",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": { description: "Staff member removed" },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" },
+          "404": { description: "Staff member not found" }
+        }
+      }
+    },
+    "/manage/entra/users": {
+      get: {
+        tags: ["Directory"],
+        summary: "List Entra ID users",
+        description: "Returns all users from the Entra ID directory. Used when adding new staff members. Admin only.",
+        operationId: "getEntraUsers",
+        responses: {
+          "200": { description: "Entra directory users", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/EntraUser" } } } } },
+          "401": { description: "Unauthenticated" },
+          "403": { description: "Admin role required" }
+        }
+      }
+    }
+  }
+};
+
+SwaggerUIBundle({
+  spec,
+  dom_id: "#swagger-ui",
+  presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+  layout: "BaseLayout",
+  supportedSubmitMethods: [],
+  defaultModelsExpandDepth: 1,
+  defaultModelExpandDepth: 1,
+  docExpansion: "list",
+  tryItOutEnabled: false
+});
+</script>
+</body>
+</html>

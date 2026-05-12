@@ -1,0 +1,133 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_AUTH_MODE: entra
+          VITE_USE_MOCK_API: 'false'
+          VITE_ENTRA_CLIENT_ID: ${{ secrets.VITE_ENTRA_CLIENT_ID }}
+          VITE_ENTRA_API_SCOPE: ${{ secrets.VITE_ENTRA_API_SCOPE }}
+          ENTRA_TENANT_ID: ${{ secrets.ENTRA_TENANT_ID }}
+          ENTRA_API_CLIENT_ID: ${{ secrets.ENTRA_API_CLIENT_ID }}
+
+      # ── Frontend ────────────────────────────────────────────────────────────
+      - name: Deploy frontend to Azure Static Web Apps
+        uses: azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: apps/web/dist
+          output_location: ''
+          skip_app_build: 'true'
+          api_location: ''
+
+      # ── Azure login (needed for Function App + settings steps) ──────────────
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── Function App settings (BEFORE zip deploy so Node version is set
+      #    before the restart that zip deployment triggers) ──────────────────
+      - name: Configure Function App settings
+        run: |
+          az functionapp config appsettings set \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_FUNCTIONAPP_NAME }} \
+            --settings \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+              AZURE_STORAGE_CONTAINER_NAME="ticket-attachments" \
+              ENTRA_TENANT_ID="${{ secrets.ENTRA_TENANT_ID }}" \
+              ENTRA_API_CLIENT_ID="${{ secrets.ENTRA_API_CLIENT_ID }}" \
+              ENTRA_API_AUDIENCE="${{ secrets.ENTRA_API_AUDIENCE }}" \
+              ENTRA_ADMIN_GROUP_ID="${{ secrets.ENTRA_ADMIN_GROUP_ID }}" \
+              ENTRA_TECH_GROUP_ID="${{ secrets.ENTRA_TECH_GROUP_ID }}" \
+              ENTRA_ALL_USERS_GROUP_ID="${{ secrets.ENTRA_ALL_USERS_GROUP_ID }}" \
+              ENTRA_API_CLIENT_SECRET="${{ secrets.ENTRA_API_CLIENT_SECRET }}" \
+              ENTRA_WEB_CLIENT_ID="${{ secrets.ENTRA_WEB_CLIENT_ID }}" \
+              ENTRA_APP_ID_URI="${{ secrets.ENTRA_APP_ID_URI }}" \
+              TEAMS_APP_ID="${{ secrets.TEAMS_APP_ID }}" \
+              FRONTEND_URL="${{ secrets.FRONTEND_URL }}" \
+              ENTRA_WEB_CLIENT_SECRET="${{ secrets.ENTRA_WEB_CLIENT_SECRET }}" \
+              ALLOW_DEV_HEADERS="false" \
+              PGSSLMODE="require" \
+              FUNCTIONS_EXTENSION_VERSION="~4" \
+              FUNCTIONS_WORKER_RUNTIME="node" \
+              AzureWebJobsFeatureFlags="EnableWorkerIndexing" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false"
+
+      # Set linuxFxVersion — required for Linux Function Apps. Without this the
+      # zip deploy returns "Bad Request" because the runtime is undetected.
+      - name: Set Node.js runtime version in site config
+        run: |
+          SUBSCRIPTION=$(az account show --query id -o tsv)
+          az rest \
+            --method patch \
+            --url "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${{ secrets.AZURE_RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ secrets.AZURE_FUNCTIONAPP_NAME }}/config/web?api-version=2023-12-01" \
+            --body '{"properties":{"linuxFxVersion":"NODE|22"}}'
+
+      # Restart so all config changes take effect before the zip deploy
+      - name: Restart Function App
+        run: |
+          az functionapp restart \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
+
+      # ── API ─────────────────────────────────────────────────────────────────
+      - name: Package API
+        run: |
+          cd apps/api
+
+          # @azure/functions must NOT be bundled — the Functions worker intercepts
+          # require('@azure/functions') to inject its gRPC channel. Install it as a
+          # real node_module so that interception works at runtime.
+          FUNC_VER=$(node -e "console.log(require('./package.json').dependencies['@azure/functions'])")
+          mkdir _runtime
+          npm install --prefix _runtime --no-package-lock "@azure/functions@${FUNC_VER}"
+          mv _runtime/node_modules .
+          rm -rf _runtime
+
+          # The Functions worker on Windows evaluates code in a context where
+          # "use strict" + const triggers SyntaxError. Strip it from user code.
+          sed -i 's/"use strict";//g' dist/index.js
+
+          zip -r ../../function-app.zip dist host.json package.json node_modules
+          rm -rf node_modules
+
+      - name: Deploy API to Azure Functions
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_FUNCTIONAPP_NAME }} \
+            --src function-app.zip
+
+      # ── Database migrations ──────────────────────────────────────────────────
+      - name: Run database migrations
+        run: node scripts/migrate.mjs
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PGSSLMODE: require

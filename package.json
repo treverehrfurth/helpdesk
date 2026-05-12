@@ -1,0 +1,26 @@
+{
+  "name": "it-helpdesk",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@11.6.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @it-helpdesk/shared && npm run build --workspace @it-helpdesk/ui && npm run build --workspace @it-helpdesk/api && npm run build --workspace @it-helpdesk/web",
+    "dev:mock": "npm run dev:mock --workspace @it-helpdesk/web",
+    "dev": "node ./scripts/run-dev.mjs",
+    "dev:entra": "node ./scripts/run-dev-entra.mjs",
+    "dev:multi": "node ./scripts/run-dev-multi.mjs",
+    "dev:api": "npm run dev --workspace @it-helpdesk/api --",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "devDependencies": {
+    "azurite": "^3.33.0"
+  }
+}

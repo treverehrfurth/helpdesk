@@ -1,0 +1,68 @@
+name: Release Teams App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'teams/manifest.json'
+      - 'teams/color.png'
+      - 'teams/outline.png'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Teams app zip
+        env:
+          TEAMS_APP_DOMAIN: ${{ secrets.TEAMS_APP_DOMAIN }}
+          TEAMS_APP_CLIENT_ID: ${{ secrets.TEAMS_APP_CLIENT_ID }}
+          TEAMS_ORG_NAME: ${{ secrets.TEAMS_ORG_NAME }}
+        run: |
+          DOMAIN="${TEAMS_APP_DOMAIN:-your-helpdesk-domain.com}"
+          CLIENT_ID="${TEAMS_APP_CLIENT_ID:-00000000-0000-0000-0000-000000000000}"
+          ORG_NAME="${TEAMS_ORG_NAME:-Your Organization}"
+
+          sed \
+            -e "s/helpdesk\.example\.com/${DOMAIN}/g" \
+            -e "s/00000000-0000-0000-0000-000000000000/${CLIENT_ID}/g" \
+            -e "s/Your Organization/${ORG_NAME}/g" \
+            teams/manifest.json > /tmp/manifest.json
+
+          cp teams/color.png /tmp/color.png
+          cp teams/outline.png /tmp/outline.png
+
+          cd /tmp && zip helpdesk-teams.zip manifest.json color.png outline.png
+
+      - name: Set release notes
+        id: notes
+        env:
+          TEAMS_APP_DOMAIN: ${{ secrets.TEAMS_APP_DOMAIN }}
+        run: |
+          if [ -n "$TEAMS_APP_DOMAIN" ]; then
+            echo "notes=The latest Teams app package. Download and install via Teams Admin Center or sideload directly." >> $GITHUB_OUTPUT
+          else
+            echo "notes=**Template package** — ready to customize for your own deployment.\n\nBefore installing, open \`manifest.json\` inside the zip and replace:\n- \`your-helpdesk-domain.com\` → your deployed app domain\n- \`00000000-0000-0000-0000-000000000000\` → your Entra web app registration client ID\n- \`Your Organization\` → your org name\n\nSee [docs/deployment.md](../../blob/main/docs/deployment.md#microsoft-teams-app) for full setup instructions." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Delete existing release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete teams-app-latest --yes --cleanup-tag 2>/dev/null || true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create teams-app-latest /tmp/helpdesk-teams.zip \
+            --title "Teams App — Latest" \
+            --notes "${{ steps.notes.outputs.notes }}" \
+            --latest=true
